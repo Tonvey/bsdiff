@@ -323,13 +323,10 @@ int bsdiff(const uint8_t* old, int64_t oldsize, const uint8_t* _new, int64_t new
 }
 
 #if defined(BSDIFF_EXECUTABLE)
-#include <sys/types.h>
 #include <bzlib.h>
 #include <err.h>
-#include <fcntl.h>
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
 using namespace bs;
 static int bz2_write(struct bsdiff_stream* stream, const void* buffer, int size)
 {
@@ -345,12 +342,11 @@ static int bz2_write(struct bsdiff_stream* stream, const void* buffer, int size)
 }
 int main(int argc,char *argv[])
 {
-	int fd;
 	int bz2err;
 	uint8_t *old,*_new;
 	off_t oldsize,newsize;
 	uint8_t buf[8];
-	FILE * pf;
+	FILE *pFilePatch,*pFileOld,*pFileNew;
 	struct bsdiff_stream stream;
 	BZFILE* bz2;
 
@@ -363,35 +359,37 @@ int main(int argc,char *argv[])
 
 	/* Allocate oldsize+1 bytes instead of oldsize bytes to ensure
 		that we never try to malloc(0) and get a NULL pointer */
-	if(((fd=open(argv[1],O_RDONLY,0))<0) ||
-		((oldsize=lseek(fd,0,SEEK_END))==-1) ||
-        ((old=(uint8_t*)malloc(oldsize+1))==NULL) ||
-		(lseek(fd,0,SEEK_SET)!=0) ||
-		(read(fd,old,oldsize)!=oldsize) ||
-		(close(fd)==-1)) err(1,"%s",argv[1]);
+	if(((pFileOld=fopen(argv[1],"rb"))==nullptr) ||
+       (fseek(pFileOld,0,SEEK_END))||
+       ((oldsize=ftell(pFileOld))==-1) ||
+       ((old=(uint8_t*)malloc(oldsize+1))==NULL) ||
+       (fseek(pFileOld,0,SEEK_SET)) ||
+       (fread(old,1,oldsize,pFileOld)!=oldsize) ||
+       (fclose(pFileOld)==EOF)) err(1,"%s",argv[1]);
 
 
 	/* Allocate newsize+1 bytes instead of newsize bytes to ensure
 		that we never try to malloc(0) and get a NULL pointer */
-	if(((fd=open(argv[2],O_RDONLY,0))<0) ||
-		((newsize=lseek(fd,0,SEEK_END))==-1) ||
-        ((_new=(uint8_t*)malloc(newsize+1))==NULL) ||
-        (lseek(fd,0,SEEK_SET)!=0) ||
-		(read(fd,_new,newsize)!=newsize) ||
-		(close(fd)==-1)) err(1,"%s",argv[2]);
+	if(((pFileNew=fopen(argv[2],"rb"))==nullptr) ||
+       (fseek(pFileNew,0,SEEK_END))||
+       ((newsize=ftell(pFileNew))==-1) ||
+       ((_new=(uint8_t*)malloc(newsize+1))==NULL) ||
+       (fseek(pFileNew,0,SEEK_SET)) ||
+       (fread(_new,1,newsize,pFileNew)!=newsize) ||
+       (fclose(pFileNew)==EOF)) err(1,"%s",argv[2]);
 
 	/* Create the patch file */
-	if ((pf = fopen(argv[3], "w")) == NULL)
+	if ((pFilePatch = fopen(argv[3], "w")) == NULL)
 		err(1, "%s", argv[3]);
 
 	/* Write header (signature+newsize)*/
 	offtout(newsize, buf);
-	if (fwrite("ENDSLEY/BSDIFF43", 16, 1, pf) != 1 ||
-		fwrite(buf, sizeof(buf), 1, pf) != 1)
+	if (fwrite("ENDSLEY/BSDIFF43", 16, 1, pFilePatch) != 1 ||
+		fwrite(buf, sizeof(buf), 1, pFilePatch) != 1)
 		err(1, "Failed to write header");
 
 
-	if (NULL == (bz2 = BZ2_bzWriteOpen(&bz2err, pf, 9, 0, 0)))
+	if (NULL == (bz2 = BZ2_bzWriteOpen(&bz2err, pFilePatch, 9, 0, 0)))
 		errx(1, "BZ2_bzWriteOpen, bz2err=%d", bz2err);
 
 	stream.opaque = bz2;
@@ -402,7 +400,7 @@ int main(int argc,char *argv[])
 	if (bz2err != BZ_OK)
 		err(1, "BZ2_bzWriteClose, bz2err=%d", bz2err);
 
-	if (fclose(pf))
+	if (fclose(pFilePatch))
 		err(1, "fclose");
 
 	/* Free the memory we used */

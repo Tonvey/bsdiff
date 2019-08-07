@@ -79,8 +79,6 @@ int bspatch(const uint8_t* old, int64_t oldsize, uint8_t* _new, int64_t newsize,
 #include <err.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
 using namespace bs;
 
 static int bz2_read(const struct bspatch_stream* stream, void* buffer, int length)
@@ -99,25 +97,24 @@ static int bz2_read(const struct bspatch_stream* stream, void* buffer, int lengt
 
 int main(int argc,char * argv[])
 {
-	FILE * f;
-	int fd;
 	int bz2err;
 	uint8_t header[24];
 	uint8_t *old, *_new;
 	int64_t oldsize, newsize;
 	BZFILE* bz2;
+	FILE *pFilePatch,*pFileOld,*pFileNew;
 	struct bspatch_stream stream;
 	struct stat sb;
 
 	if(argc!=4) errx(1,"usage: %s oldfile newfile patchfile\n",argv[0]);
 
 	/* Open patch file */
-	if ((f = fopen(argv[3], "r")) == NULL)
+	if ((pFilePatch = fopen(argv[3], "r")) == NULL)
 		err(1, "fopen(%s)", argv[3]);
 
 	/* Read header */
-	if (fread(header, 1, 24, f) != 24) {
-		if (feof(f))
+	if (fread(header, 1, 24, pFilePatch) != 24) {
+		if (feof(pFilePatch))
 			errx(1, "Corrupt patch\n");
 		err(1, "fread(%s)", argv[3]);
 	}
@@ -132,16 +129,17 @@ int main(int argc,char * argv[])
 		errx(1,"Corrupt patch\n");
 
 	/* Close patch file and re-open it via libbzip2 at the right places */
-	if(((fd=open(argv[1],O_RDONLY,0))<0) ||
-		((oldsize=lseek(fd,0,SEEK_END))==-1) ||
-       ((old=(uint8_t*)malloc(oldsize+1))==NULL) ||
-		(lseek(fd,0,SEEK_SET)!=0) ||
-		(read(fd,old,oldsize)!=oldsize) ||
-		(fstat(fd, &sb)) ||
-		(close(fd)==-1)) err(1,"%s",argv[1]);
+     if(((pFileOld=fopen(argv[1],"rb"))==nullptr) ||
+        (fseek(pFileOld,0,SEEK_END))||
+        ((oldsize=ftell(pFileOld))==-1) ||
+        ((old=(uint8_t*)malloc(oldsize+1))==NULL) ||
+        (fseek(pFileOld,0,SEEK_SET)) ||
+        (fread(old,1,oldsize,pFileOld)!=oldsize) ||
+        //(fstat(fd, &sb)) ||
+        (fclose(pFileOld)==EOF)) err(1,"%s",argv[1]);
 	if((_new=(uint8_t*)malloc(newsize+1))==NULL) err(1,NULL);
 
-	if (NULL == (bz2 = BZ2_bzReadOpen(&bz2err, f, 0, 0, NULL, 0)))
+	if (NULL == (bz2 = BZ2_bzReadOpen(&bz2err, pFilePatch, 0, 0, NULL, 0)))
 		errx(1, "BZ2_bzReadOpen, bz2err=%d", bz2err);
 
 	stream.read = bz2_read;
@@ -151,11 +149,11 @@ int main(int argc,char * argv[])
 
 	/* Clean up the bzip2 reads */
 	BZ2_bzReadClose(&bz2err, bz2);
-	fclose(f);
+	fclose(pFilePatch);
 
 	/* Write the new file */
-	if(((fd=open(argv[2],O_CREAT|O_TRUNC|O_WRONLY,sb.st_mode))<0) ||
-		(write(fd,_new,newsize)!=newsize) || (close(fd)==-1))
+	if(((pFileNew=fopen(argv[2],"wb"))==nullptr) ||
+       (fwrite(_new,1,newsize,pFileNew)!=newsize) || (fclose(pFileNew)==EOF))
 		err(1,"%s",argv[2]);
 
 	free(_new);
