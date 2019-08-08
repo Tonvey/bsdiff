@@ -1,7 +1,29 @@
 #include "bspatch.h"
+#include <cstdlib>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <sstream>
+#include <memory>
+#include <bzlib.h>
+using namespace std;
 
 namespace bs
 {
+static int bz2_read(const struct bspatch_stream* stream, void* buffer, int length)
+{
+    int n;
+    int bz2err;
+    BZFILE* bz2;
+
+    bz2 = (BZFILE*)stream->opaque;
+    n = BZ2_bzRead(&bz2err, bz2, buffer, length);
+    if (n != length)
+        return -1;
+
+    return 0;
+}
+
 static int64_t offtin(uint8_t *buf)
 {
 	int64_t y;
@@ -20,7 +42,7 @@ static int64_t offtin(uint8_t *buf)
 	return y;
 }
 
-int bspatch(const uint8_t* old, int64_t oldsize, uint8_t* _new, int64_t newsize, struct bspatch_stream* stream)
+int BSPatch::Patch(const uint8_t* old, int64_t oldsize, uint8_t* _new, int64_t newsize, struct bspatch_stream* stream)
 {
 	uint8_t buf[8];
 	int64_t oldpos,newpos;
@@ -68,97 +90,113 @@ int bspatch(const uint8_t* old, int64_t oldsize, uint8_t* _new, int64_t newsize,
 
 	return 0;
 }
-}//end namespace
-
-#if defined(BSPATCH_EXECUTABLE)
-#include <bzlib.h>
-#include <cstdlib>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <err.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-using namespace bs;
-
-static int bz2_read(const struct bspatch_stream* stream, void* buffer, int length)
-{
-	int n;
-	int bz2err;
-	BZFILE* bz2;
-
-	bz2 = (BZFILE*)stream->opaque;
-	n = BZ2_bzRead(&bz2err, bz2, buffer, length);
-	if (n != length)
-		return -1;
-
-	return 0;
-}
-
-int main(int argc,char * argv[])
+int BSPatch::Patch(const std::string oldFile,const std::string newFile,const std::string patchFile ,std::string &errMsg)
 {
 	int bz2err;
 	uint8_t header[24];
-	uint8_t *old, *_new;
+	unique_ptr<uint8_t> old, _new;
 	int64_t oldsize, newsize;
 	BZFILE* bz2;
 	FILE *pFilePatch,*pFileOld,*pFileNew;
 	struct bspatch_stream stream;
-	struct stat sb;
-
-	if(argc!=4) errx(1,"usage: %s oldfile newfile patchfile\n",argv[0]);
+    stringstream ss;
 
 	/* Open patch file */
-	if ((pFilePatch = fopen(argv[3], "r")) == NULL)
-		err(1, "fopen(%s)", argv[3]);
+	if ((pFilePatch = fopen(patchFile.c_str(),"r")) == NULL)
+    {
+        ss<<"fopen("<<patchFile<<")"<<endl;
+        goto ERR;
+    }
 
 	/* Read header */
-	if (fread(header, 1, 24, pFilePatch) != 24) {
+	if (fread(header, 1, 24, pFilePatch) != 24)
+    {
 		if (feof(pFilePatch))
-			errx(1, "Corrupt patch\n");
-		err(1, "fread(%s)", argv[3]);
+        {
+			ss<<"Corrupt patch"<<endl;
+            goto ERR;
+        }
+        ss<<"fread("<<patchFile<<")"<<endl;
+        goto ERR;
 	}
 
 	/* Check for appropriate magic */
 	if (memcmp(header, "ENDSLEY/BSDIFF43", 16) != 0)
-		errx(1, "Corrupt patch\n");
+    {
+		ss<<"Corrupt patch"<<endl;
+        goto ERR;
+    }
 
 	/* Read lengths from header */
 	newsize=offtin(header+16);
 	if(newsize<0)
-		errx(1,"Corrupt patch\n");
+    {
+        ss<<"Corrupt patch"<<endl;
+        goto ERR;
+    }
 
 	/* Close patch file and re-open it via libbzip2 at the right places */
-     if(((pFileOld=fopen(argv[1],"rb"))==nullptr) ||
+    if(((pFileOld=fopen(oldFile.c_str(),"rb"))==nullptr) ||
         (fseek(pFileOld,0,SEEK_END))||
         ((oldsize=ftell(pFileOld))==-1) ||
-        ((old=(uint8_t*)malloc(oldsize+1))==NULL) ||
+        (!(old=unique_ptr<uint8_t>((uint8_t*)malloc(oldsize+1))) ||
         (fseek(pFileOld,0,SEEK_SET)) ||
-        (fread(old,1,oldsize,pFileOld)!=oldsize) ||
-        //(fstat(fd, &sb)) ||
-        (fclose(pFileOld)==EOF)) err(1,"%s",argv[1]);
-	if((_new=(uint8_t*)malloc(newsize+1))==NULL) err(1,NULL);
+        (fread(old.get(),1,oldsize,pFileOld)!=oldsize) ||
+         (fclose(pFileOld)==EOF)))
+     {
+         ss<<oldFile<<endl;
+         goto ERR;
+     }
+    if(!(_new=unique_ptr<uint8_t>((uint8_t*)malloc(newsize+1))))
+    {
+        ss<<"malloc"<<endl;
+        goto ERR;
+    }
 
 	if (NULL == (bz2 = BZ2_bzReadOpen(&bz2err, pFilePatch, 0, 0, NULL, 0)))
-		errx(1, "BZ2_bzReadOpen, bz2err=%d", bz2err);
+    {
+		ss<<"BZ2_bzReadOpen, bz2err="<<bz2err<<endl;
+        goto ERR;
+    }
 
 	stream.read = bz2_read;
 	stream.opaque = bz2;
-	if (bspatch(old, oldsize, _new, newsize, &stream))
-		errx(1, "bspatch");
+	if (Patch(old.get(), oldsize, _new.get(), newsize, &stream))
+    {
+		ss<<"Patch"<<endl;
+        goto ERR;
+    }
 
 	/* Clean up the bzip2 reads */
 	BZ2_bzReadClose(&bz2err, bz2);
 	fclose(pFilePatch);
 
 	/* Write the new file */
-	if(((pFileNew=fopen(argv[2],"wb"))==nullptr) ||
-       (fwrite(_new,1,newsize,pFileNew)!=newsize) || (fclose(pFileNew)==EOF))
-		err(1,"%s",argv[2]);
+     if(((pFileNew=fopen(newFile.c_str(),"wb"))==nullptr) ||
+       (fwrite(_new.get(),1,newsize,pFileNew)!=newsize) || (fclose(pFileNew)==EOF))
+    {
+		ss<<"newFile"<<endl;
+        goto ERR;
+    }
+    return 0;
+ ERR:
+    errMsg = ss.str();
+    return -1;
+}
+}//end namespace
 
-	free(_new);
-	free(old);
+#if defined(BSPATCH_EXECUTABLE)
+#include <iostream>
+using namespace bs;
 
-	return 0;
+int main(int argc,char * argv[])
+{
+    string errMsg;
+	int ret = BSPatch::Patch(argv[0],argv[1],argv[2],errMsg);
+    if(ret)
+    {
+        cerr<<errMsg<<endl;
+    }
+    return ret;
 }
 #endif
