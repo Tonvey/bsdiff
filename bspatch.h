@@ -6,8 +6,8 @@ namespace bs
 {
 struct bspatch_stream
 {
-	void* opaque;
-	int (*read)(const struct bspatch_stream* stream, void* buffer, int length);
+    void* opaque;
+    int (*read)(const struct bspatch_stream* stream, void* buffer, int length);
 };
 
 class BSPatch
